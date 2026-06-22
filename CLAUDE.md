@@ -28,7 +28,10 @@ Active workstreams live in `projects/`, each with a `README.md` (description, st
 - **Higgsfield video-generation webapp** — in development; goal is to ship it online.
 
 ## Skills
-Skills live in `.claude/skills/`. Each is a folder with a `SKILL.md` (`.claude/skills/<skill-name>/SKILL.md`). They're built organically as recurring workflows emerge. None exist yet.
+Skills live in `.claude/skills/`. Each is a folder with a `SKILL.md` (`.claude/skills/<skill-name>/SKILL.md`). They're built organically as recurring workflows emerge.
+
+Installed:
+- **research** — context-aware deep research via Perplexity (`.claude/skills/research/`). Loads your profile/goals/projects so findings are framed around your work. API key in `.env` (script reads it; assistant never does).
 
 ### Skills to Build
 Backlog of workflows hex2 wants handed off — turn these into skills over time:

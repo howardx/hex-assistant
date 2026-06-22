@@ -8,5 +8,15 @@
       "Read(./build)",
       "Read(./.ignore/**)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          { "type": "command", "command": "node .claude/hooks/validate-skill-or-agent.mjs" }
+        ]
+      }
+    ]
   }
 }

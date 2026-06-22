@@ -27,11 +27,15 @@ Writing rules (tone, format, pet peeves) and content guidelines live in `.claude
 Active workstreams live in `projects/`, each with a `README.md` (description, status, key dates).
 - **Higgsfield video-generation webapp** — in development; goal is to ship it online.
 
-## Skills
-Skills live in `.claude/skills/`. Each is a folder with a `SKILL.md` (`.claude/skills/<skill-name>/SKILL.md`). They're built organically as recurring workflows emerge.
+## Skills & Subagents
+Skills live in `.claude/skills/` (each a folder with a `SKILL.md`); subagents live in `.claude/agents/` (one markdown file each). They're built organically as recurring workflows emerge.
+
+**Where a skill runs:** main agent by default; delegate to a sub-agent only when the task needs isolation. The prompt decides which.
+
+**Creating/editing skills or subagents:** follow `references/sops/writing-skills-and-subagents.md` (frontmatter, conciseness, tool-restriction, the skill/subagent split). A PreToolUse hook validates new files automatically.
 
 Installed:
-- **research** — context-aware deep research via Perplexity (`.claude/skills/research/`). Loads your profile/goals/projects so findings are framed around your work. API key in `.env` (script reads it; assistant never does).
+- **research** — context-aware deep research via the **Perplexity API** (`.claude/skills/research/` + `.claude/agents/research.md`). Runs in the main agent by default; the `research` sub-agent handles deep/isolated reports. Loads your profile/goals/projects so findings are framed around your work. API key in `.env` (script reads it; assistant never does).
 
 ### Skills to Build
 Backlog of workflows hex2 wants handed off — turn these into skills over time:

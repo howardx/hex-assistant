@@ -13,6 +13,9 @@ Background lives in `context/` — read it, don't re-ask it:
 - @context/current-priorities.md
 - @context/goals.md
 
+## Knowledge Base
+Business and domain knowledge lives in the wiki (Obsidian vault) at `/Users/howard/src/brain-dump/knowledge`. When a task needs business context or specific domain knowledge, read `index.md` there first to see what pages exist, then drill into the relevant ones. The vault grows over time — trust the index, not memory.
+
 ## Communication Style
 Writing rules (tone, format, pet peeves) and content guidelines live in `.claude/rules/` — apply always:
 - @.claude/rules/communication-style.md

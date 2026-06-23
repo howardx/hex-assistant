@@ -1,0 +1,14 @@
+{
+  "_comment": "creator-watch watchlist. Edit freely; add/remove accounts anytime.",
+  "_twitter_note": "handles WITHOUT the leading @. The skill also reads linked articles the author posts.",
+  "_youtube_note": "channel URL or @handle; the skill fetches recent videos' transcripts.",
+  "twitter": [
+    { "handle": "SVScholar", "name": "SVScholar" },
+    { "handle": "BTCdayu", "name": "BTCdayu" }
+  ],
+  "youtube": [
+    { "url": "https://www.youtube.com/@nateherk", "name": "nateherk" },
+    { "url": "https://www.youtube.com/@clearvaluetax9382", "name": "ClearValue Tax" },
+    { "url": "https://www.youtube.com/@NoPriorsPodcast", "name": "No Priors" }
+  ]
+}

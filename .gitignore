@@ -2,3 +2,6 @@
 CLAUDE.local.md
 .claude/settings.local.json
 node_modules/
+
+# creator-watch runtime state (seen tweet/video IDs, last run)
+.claude/skills/creator-watch/state.json

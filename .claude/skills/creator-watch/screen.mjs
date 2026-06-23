@@ -63,6 +63,7 @@ const modelOverride = flag('model');
 const sinceOverride = flag('since');
 const noContext = args.includes('--no-context');
 const fetchOnly = args.includes('--fetch-only');
+const force = args.includes('--force'); // ignore seen-state: re-fetch+re-summarize without changing state (regenerate a capture)
 const posArgs = args.filter((a) => !a.startsWith('--'));
 const filter = posArgs.length ? posArgs.join(' ') : 'all';
 const model = modelOverride || (depth === 'deep' ? 'sonar-deep-research' : depth === 'quick' ? 'sonar' : DEFAULT_MODEL);
@@ -225,17 +226,17 @@ if (!wl.twitter.length && !wl.youtube.length) { console.error('No accounts to sc
 
 const state = loadState();
 const sinceMs = sinceOverride ? Date.parse(sinceOverride) : (state.lastRun ? Date.parse(state.lastRun) : null);
-const cutoffMs = (sinceMs && !Number.isNaN(sinceMs)) ? sinceMs : (Date.now() - DEFAULT_WINDOW_DAYS * 86400000);
-process.stderr.write(`[since: ${new Date(cutoffMs).toISOString()} | accounts: ${wl.twitter.length} X, ${wl.youtube.length} YT]\n`);
+const cutoffMs = force ? 0 : ((sinceMs && !Number.isNaN(sinceMs)) ? sinceMs : (Date.now() - DEFAULT_WINDOW_DAYS * 86400000)); // force => no recency filter
+process.stderr.write(`[since: ${force ? '(forced: full window)' : new Date(cutoffMs).toISOString()} | accounts: ${wl.twitter.length} X, ${wl.youtube.length} YT]\n`);
 
 const twitter = {}, youtube = {}, errors = [];
 const rawSamples = { twitter: {}, youtube: {} }; // for --fetch-only diagnostics
 for (const acct of wl.twitter) {
-  try { const r = await fetchTwitter(acct); rawSamples.twitter[acct.handle] = r; twitter[acct.handle] = keepNew(r.items, state.twitter || {}, (t) => t.id, (t) => t.dateMs, cutoffMs); }
+  try { const r = await fetchTwitter(acct); rawSamples.twitter[acct.handle] = r; twitter[acct.handle] = keepNew(r.items, force ? {} : (state.twitter || {}), (t) => t.id, (t) => t.dateMs, cutoffMs); }
   catch (e) { errors.push(`twitter @${acct.handle}: ${e.message}`); twitter[acct.handle] = []; }
 }
 for (const acct of wl.youtube) {
-  try { const r = await fetchYouTube(acct); rawSamples.youtube[acct.name || acct.url] = r; youtube[acct.name || acct.url] = keepNew(r.items, state.youtube || {}, (v) => v.id, (v) => v.dateMs, cutoffMs); }
+  try { const r = await fetchYouTube(acct); rawSamples.youtube[acct.name || acct.url] = r; youtube[acct.name || acct.url] = keepNew(r.items, force ? {} : (state.youtube || {}), (v) => v.id, (v) => v.dateMs, cutoffMs); }
   catch (e) { errors.push(`youtube ${acct.name || acct.url}: ${e.message}`); youtube[acct.name || acct.url] = []; }
 }
 
@@ -282,10 +283,12 @@ for (const [name, vs] of Object.entries(youtube)) {
   sections.push(`## YouTube / ${name}\n${body}`);
 }
 
-// record seen IDs for whatever we successfully fetched (so retries don't reprocess)
-for (const [, ts] of Object.entries(twitter)) for (const t of ts) if (t.id) state.twitter[t.id] = true;
-for (const [, vs] of Object.entries(youtube)) for (const v of vs) if (v.id) state.youtube[v.id] = true;
-if (!errors.length) state.lastRun = new Date().toISOString(); // advance window only on a clean run
+// record seen IDs for whatever we successfully fetched (so retries don't reprocess) — skipped under --force
+if (!force) {
+  for (const [, ts] of Object.entries(twitter)) for (const t of ts) if (t.id) state.twitter[t.id] = true;
+  for (const [, vs] of Object.entries(youtube)) for (const v of vs) if (v.id) state.youtube[v.id] = true;
+  if (!errors.length) state.lastRun = new Date().toISOString(); // advance window only on a clean run
+}
 
 const ctx = loadContext();
 const system = [
@@ -303,7 +306,7 @@ const system = [
   'ABSOLUTE RULES:',
   '- When classifying is borderline, treat it as OPINION and append "(uncertain)".',
   '- Attribute every item to the creator who said it, with the original source link (tweet URL or video URL).',
-  '- Every FACT must also carry a verification source link. Never invent sources or citations.',
+  '- Every FACT must also carry a verification source link. Cite EVERY source as an INLINE markdown link with the FULL verbatim URL (e.g. "per Redfin](https://www.redfin.com/news/...)"). Do NOT use bare numeric markers like [9] — they break and silently drop sources. Never invent sources or URLs.',
   '- Summarize ONLY the content you were given. For linked article URLs, read and summarize what you can actually access; if you cannot access one, write "could not access" rather than inventing content.',
   '- Never fabricate quotes, numbers, dates, or claims. If a source is ambiguous, say so.',
   '- Lead with the most important items. Tight bullets, one-line takeaway each. No filler, no marketing language, no hype, NO EMOJIS.',
@@ -316,7 +319,7 @@ const system = [
   '   - **Opinions** — each bullet carries the take and the original source link.',
   '   Omit a creator who had no new content.',
   '4. A short **Open questions / watch list** for next time.',
-  'End with a **Sources** list of every URL you referenced.',
+  'Do NOT write a "Sources" section — the harness builds it from the URLs you inline. Stop after "Open questions".',
 ].join('\n');
 
 const userParts = [];
@@ -369,13 +372,19 @@ const header = [
   `> ${totalNew} new items since ${new Date(cutoffMs).toISOString().slice(0, 10)}. Facts are web-verified (confirmed/disputed/unverifiable).${errors.length ? ` ${errors.length} fetch error(s): ${errors.join('; ')}` : ''}`,
   '',
 ].join('\n');
-const footer = citations.length ? `\n\n---\n## Sources\n${citations.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n` : '\n';
+// Perplexity's `citations` array is often a partial subset of what it actually cited (esp. for long,
+// multi-search answers), so don't rely on it — collect every URL the model inlined in the text, then union.
+const citedUrls = Array.from(new Set([
+  ...((content.match(/https?:\/\/[^\s)\]>"']+/g) || []).map((u) => u.replace(/[.,;!?)\]]+$/, ''))),
+  ...citations,
+]));
+const footer = citedUrls.length ? `\n\n---\n## Sources (${citedUrls.length})\n${citedUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}\n` : '\n';
 writeFileSync(fpath, header + content + footer);
-process.stderr.write(`[wrote ${fpath} | model: ${usedModel} | citations: ${citations.length}]\n`);
+process.stderr.write(`[wrote ${fpath} | model: ${usedModel} | sources: ${citedUrls.length} (perplexity citations array: ${citations.length})]\n`);
 
-saveState(state);
+if (!force) saveState(state);
 
 // --- present in chat (casual, tight, no emojis — see .claude/rules) --------------------
 console.log(content);
-if (citations.length) { console.log('\n--- Sources ---'); citations.forEach((c, i) => console.log(`${i + 1}. ${c}`)); }
+if (citedUrls.length) { console.log('\n--- Sources ---'); citedUrls.forEach((u, i) => console.log(`${i + 1}. ${u}`)); }
 console.log(`\n_(saved to ${fpath})_`);

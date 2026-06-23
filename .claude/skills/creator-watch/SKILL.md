@@ -24,9 +24,10 @@ node .claude/skills/creator-watch/screen.mjs SVScholar                # just one
 node .claude/skills/creator-watch/screen.mjs --fetch-only             # calibration: raw fields only, no Perplexity call
 node .claude/skills/creator-watch/screen.mjs --depth deep             # thorough verification pass (sonar-deep-research, slower)
 node .claude/skills/creator-watch/screen.mjs --since 2026-06-01       # override the recency window
+node .claude/skills/creator-watch/screen.mjs --force                  # re-run ignoring seen-state (regenerate a capture); state unchanged
 ```
 
-Flags: `--fetch-only` `--depth quick|standard|deep` `--since YYYY-MM-DD` `--model <sonar model>` `--no-context`.
+Flags: `--fetch-only` `--force` `--depth quick|standard|deep` `--since YYYY-MM-DD` `--model <sonar model>` `--no-context`.
 
 Then present the result per **Output handling** below. Don't pad it.
 
@@ -81,6 +82,7 @@ Accounts live in `.claude/skills/creator-watch/watchlist.json`. Add/remove handl
 - **Twitter actor returns `noResults`:** X periodically blocks scrapers (apidojo/tweet-scraper was dead as of 2026-06). Switch `TWITTER_ACTOR` to the `kaitoeasyapi~...` fallback noted in `screen.mjs`, then confirm with `--fetch-only`.
 - **YouTube returns no transcript:** confirm `YT_ACTOR` accepts `{ startUrls:[{url}] }`; if it wants a different field (e.g. `urls`, `channelUrls`), edit `buildYtInput()`. Some videos genuinely have no captions.
 - **Perplexity timeout:** use `--depth standard` or `quick` (deep research can take minutes).
+- **Sources list looks short:** it's built from every URL inlined in the text — Perplexity's separate `citations` array is often a partial subset on long answers, so it isn't relied on. Re-run with `--force` to regenerate a capture.
 
 ## Notes
 - Verification tags are **probabilistic** — the web can be silent on niche claims, and Perplexity can be wrong. Treat `disputed`/`unverifiable` as flags to weigh, not verdicts.

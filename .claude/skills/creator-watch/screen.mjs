@@ -38,6 +38,7 @@ const WATCHLIST_PATH = join(__dirname, 'watchlist.json');
 //   (apidojo~tweet-scraper returns noResults as of 2026-06 — X blocked it. If this one stops too,
 //    fall back to kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest — richer schema, $0.25/1k.)
 const TWITTER_ACTOR = 'xquik~x-tweet-scraper';
+const TWITTER_FALLBACK_ACTOR = 'kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest'; // used if the primary returns no real tweets (X blocks scrapers intermittently)
 // YouTube: codepoetry~youtube-transcript-ai-scraper input { startUrls:[{url: channel}], maxItems }.
 //   Returns per-video transcripts (field read resiliently below). If this actor's input field
 //   differs, edit buildYtInput(). Verify with --fetch-only before the first real run.
@@ -49,6 +50,8 @@ const DEFAULT_MODEL = 'sonar-pro'; // verification via live search; use --depth 
 const MAX_TWEETS = Number(process.env.CW_MAX_TWEETS || 15);
 const MAX_VIDEOS = Number(process.env.CW_MAX_VIDEOS || 3);
 const MAX_TRANSCRIPT_CHARS = Number(process.env.CW_MAX_TRANSCRIPT || 6000);
+const MAX_ARTICLES = Number(process.env.CW_MAX_ARTICLES || 4); // native X Articles to render per handle (headless browser)
+const MAX_ARTICLE_CHARS = Number(process.env.CW_MAX_ARTICLE || 8000);
 const DEFAULT_WINDOW_DAYS = 14; // fallback window when there's no last-run state
 
 // --- arg parsing ----------------------------------------------------------------------
@@ -169,9 +172,14 @@ async function runActor(actorId, input, label) {
   return Array.isArray(data) ? data : (data?.items || data?.datasetItems || data?.data || []);
 }
 async function fetchTwitter(acct) {
-  const raw = await runActor(TWITTER_ACTOR, { searchTerms: [`from:${acct.handle}`], maxItems: MAX_TWEETS }, `twitter @${acct.handle}`);
+  let raw = await runActor(TWITTER_ACTOR, { searchTerms: [`from:${acct.handle}`], maxItems: MAX_TWEETS }, `twitter @${acct.handle}`);
+  let real = raw.filter((t) => !(t && t.noResults) && (t.text || t.full_text));
+  if (!real.length) { // primary came back empty (X intermittently blocks scrapers) — try the fallback actor
+    process.stderr.write(`[twitter @${acct.handle}] primary empty — trying fallback ${TWITTER_FALLBACK_ACTOR}...\n`);
+    raw = await runActor(TWITTER_FALLBACK_ACTOR, { searchTerms: [`from:${acct.handle}`], maxItems: MAX_TWEETS }, `twitter @${acct.handle} (fallback)`);
+  }
   const items = raw.map((t) => normalizeTweet(t, acct.handle)).filter((t) => t.text);
-  return { items, rawCount: raw.length, sample: raw[0] };
+  return { items, rawCount: items.length, sample: raw[0] };
 }
 function buildYtInput(channelUrl) { return { startUrls: [{ url: channelUrl }], maxItems: MAX_VIDEOS }; }
 async function fetchYouTube(acct) {
@@ -199,6 +207,54 @@ function keepNew(items, seen, getId, getDate, cutoffMs) {
 
 // --- context loader (reuse research.mjs pattern) --------------------------------------
 function readTrim(p, max = 1500) { try { const t = readFileSync(p, 'utf8').trim(); return t ? t.slice(0, max) : null; } catch { return null; } }
+// --- X Article rendering (native long-form posts; the body is login-walled, so render it in a headless
+//     browser using the user's X session cookies, like a logged-in reader would) ---
+const articleIdOf = (raw) => {
+  const ents = raw?.entities?.urls || raw?.urls || [];
+  for (const u of ents) { const v = typeof u === 'string' ? u : (u?.expanded_url || u?.expandedUrl || u?.url || ''); const m = v.match(/\/i\/article\/(\d+)/); if (m) return m[1]; }
+  return null;
+};
+async function fetchArticleBodies(queue) {
+  let chromium;
+  try { ({ chromium } = await import('playwright-core')); }
+  catch { process.stderr.write('[articles] playwright-core not installed (run `npm install` in .claude/skills/creator-watch) — skipping article bodies\n'); return {}; }
+  const AUTH = envKey(['X_AUTH_TOKEN']); const CT0 = envKey(['X_CT0']);
+  if (!AUTH || !CT0) { process.stderr.write('[articles] X_AUTH_TOKEN/X_CT0 not set — skipping article bodies\n'); return {}; }
+  process.stderr.write(`[articles] rendering ${queue.length} article(s) via headless Chrome (your X login)...\n`);
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const out = {};
+  let expired = false;
+  try {
+    const ctx = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 900 },
+    });
+    await ctx.addCookies([
+      { name: 'auth_token', value: AUTH, domain: '.x.com', path: '/' }, { name: 'ct0', value: CT0, domain: '.x.com', path: '/' },
+      { name: 'auth_token', value: AUTH, domain: '.twitter.com', path: '/' }, { name: 'ct0', value: CT0, domain: '.twitter.com', path: '/' },
+    ]);
+    for (const a of queue) {
+      const page = await ctx.newPage();
+      try {
+        await page.goto(`https://x.com/i/article/${a.articleId}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(3500);
+        try { await page.waitForSelector('[data-testid="twitterArticleRichTextView"]', { timeout: 20000 }); } catch {}
+        const title = await page.locator('[data-testid="twitter-article-title"]').innerText().catch(() => '');
+        const body = await page.locator('[data-testid="twitterArticleRichTextView"]').innerText().catch(() => '');
+        const full = (title ? `# ${title}\n\n` : '') + (body || '');
+        if (full.replace(/\s/g, '').length > 60) out[a.articleId] = full;
+        else { // no body → maybe session expired (login wall)
+          const t = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+          if (/log in|sign in|enter your phone or username/i.test(t) && !/[一-鿿A-Za-z0-9]{50,}/.test(t)) expired = true;
+        }
+      } catch (e) { process.stderr.write(`[articles] failed ${a.articleId}: ${String(e?.message || e).slice(0, 120)}\n`); }
+      finally { await page.close().catch(() => {}); }
+    }
+  } finally { await browser.close().catch(() => {}); }
+  if (expired) out.__expired = true;
+  process.stderr.write(`[articles] fetched ${Object.keys(out).length - (expired ? 1 : 0)} article body/bodies${expired ? ' [X SESSION LIKELY EXPIRED]' : ''}\n`);
+  return out;
+}
 function loadContext() {
   if (noContext) return null;
   const parts = [];
@@ -266,15 +322,43 @@ if (totalNew === 0) {
 // --- build dossier for Perplexity -----------------------------------------------------
 const sections = [];
 const allArticleUrls = [];
+// render native X Article bodies (login-walled) via headless browser, using the user's X login
+const articleQueue = [];
+for (const [h, ts] of Object.entries(twitter)) {
+  for (const a of topN(ts.filter((t) => articleIdOf(t.raw)), MAX_ARTICLES)) articleQueue.push({ handle: h, articleId: articleIdOf(a.raw), url: a.url, dateMs: a.dateMs });
+}
+let articleBodies = {};
+let xSessionExpired = false;
+if (articleQueue.length) {
+  articleBodies = await fetchArticleBodies(articleQueue).catch((e) => { process.stderr.write(`[articles] render aborted: ${String(e?.message || e).slice(0, 160)}\n`); return {}; });
+  if (articleBodies.__expired) { xSessionExpired = true; delete articleBodies.__expired; }
+}
+
 for (const [h, ts] of Object.entries(twitter)) {
   if (!ts.length) continue;
   const top = topN(ts, MAX_TWEETS);
-  const body = top.map((t) => {
-    const urls = extractArticleUrls(t.raw, t.text); urls.forEach((u) => allArticleUrls.push(u));
-    const d = t.dateMs ? new Date(t.dateMs).toISOString().slice(0, 10) : '????-??-??';
-    return `- (${d}) ${trunc(t.text, 1000)}${t.url ? ` [tweet](${t.url})` : ''}${urls.length ? `\n   linked articles: ${urls.join(' ')}` : ''}`;
-  }).join('\n');
-  sections.push(`## X / @${h}\n${body}`);
+  const parts = [];
+  const plain = top.filter((t) => !articleIdOf(t.raw));
+  if (plain.length) {
+    parts.push('**Tweets:**\n' + plain.map((t) => {
+      const urls = extractArticleUrls(t.raw, t.text); urls.forEach((u) => allArticleUrls.push(u));
+      const d = t.dateMs ? new Date(t.dateMs).toISOString().slice(0, 10) : '????-??-??';
+      return `- (${d}) ${trunc(t.text, 1000)}${t.url ? ` [tweet](${t.url})` : ''}${urls.length ? `\n   linked articles: ${urls.join(' ')}` : ''}`;
+    }).join('\n'));
+  }
+  const withBody = top.filter((t) => { const aid = articleIdOf(t.raw); return aid && articleBodies[aid]; });
+  const noBody = top.filter((t) => { const aid = articleIdOf(t.raw); return aid && !articleBodies[aid]; });
+  if (withBody.length || noBody.length) {
+    const blocks = withBody.map((t) => {
+      const aid = articleIdOf(t.raw); const full = articleBodies[aid] || '';
+      const title = (full.split('\n')[0] || '').replace(/^#\s*/, '').slice(0, 140);
+      const d = t.dateMs ? new Date(t.dateMs).toISOString().slice(0, 10) : '????-??-??';
+      return `### Article: ${title || '(untitled)'} (${d}) — ${t.url}\n${trunc(full, MAX_ARTICLE_CHARS)}`;
+    });
+    if (noBody.length) blocks.push('Articles whose body could not be fetched (link only): ' + noBody.map((t) => t.url).join(' '));
+    parts.push('**Articles (native X long-form):**\n' + blocks.join('\n\n'));
+  }
+  sections.push(`## X / @${h}\n${parts.join('\n\n')}`);
 }
 for (const [name, vs] of Object.entries(youtube)) {
   if (!vs.length) continue;
@@ -311,6 +395,7 @@ const system = [
   '- Never fabricate quotes, numbers, dates, or claims. If a source is ambiguous, say so.',
   '- Lead with the most important items. Tight bullets, one-line takeaway each. No filler, no marketing language, no hype, NO EMOJIS.',
   '- Where clearly relevant, add a one-line note on why it matters for the user (AI-centric products, TypeScript, pre-revenue solo founder).',
+  '- Some X sections contain **Articles** (native long-form posts whose full body is included) — summarize and verify their points like any other content, the same Facts/Opinions split.',
   'FORMAT as GitHub-flavored markdown, in this order:',
   '1. A 1-3 sentence TL;DR of the most important movement.',
   '2. **Claims to scrutinize** — list EVERY fact you tagged disputed (highest-value signal), each with: the claim, who said it, why it\'s disputed, and a source. If none, write "None — no claims flagged as disputed."',
@@ -369,7 +454,7 @@ const header = [
   '',
   `# Creator Watch — ${today}`,
   '',
-  `> ${totalNew} new items since ${new Date(cutoffMs).toISOString().slice(0, 10)}. Facts are web-verified (confirmed/disputed/unverifiable).${errors.length ? ` ${errors.length} fetch error(s): ${errors.join('; ')}` : ''}`,
+  `> ${totalNew} new items since ${new Date(cutoffMs).toISOString().slice(0, 10)}. Facts are web-verified (confirmed/disputed/unverifiable).${Object.keys(articleBodies).length ? ` ${Object.keys(articleBodies).length} X Article body/bodies fetched.` : ''}${xSessionExpired ? ' WARNING: X session looks expired — refresh X_AUTH_TOKEN/X_CT0; article bodies were not fetched.' : ''}${errors.length ? ` ${errors.length} fetch error(s): ${errors.join('; ')}` : ''}`,
   '',
 ].join('\n');
 // Perplexity's `citations` array is often a partial subset of what it actually cited (esp. for long,

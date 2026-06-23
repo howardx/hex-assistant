@@ -31,9 +31,14 @@ Flags: `--fetch-only` `--force` `--depth quick|standard|deep` `--since YYYY-MM-D
 
 Then present the result per **Output handling** below. Don't pad it.
 
+## Setup (one-time)
+- Keys in `.env` (the script reads them; you never do): `PERPLEXITY_API_KEY`, `APIFY_API_KEY`.
+- **X Articles need your X login** (their bodies are login-walled): add `X_AUTH_TOKEN` and `X_CT0` to `.env`. Grab both from browser DevTools → Application → Cookies → `x.com` while logged in. Without them, tweets/transcripts still work but X Article bodies are skipped (shown as links only).
+- **Playwright** renders articles in your installed Chrome. Once, in the skill dir: `cd .claude/skills/creator-watch && npm install` (installs `playwright-core`). No Chromium download — it drives your Chrome via `channel:'chrome'`. macOS + Google Chrome required.
+
 ## What the script does (black box)
 1. Reads `watchlist.json` + `state.json` (seen tweet/video IDs).
-2. **Twitter** via Apify `xquik/x-tweet-scraper` (search `from:<handle>`) → recent tweets per handle; drops already-seen IDs and anything older than the window; pulls out linked **article URLs** for the author.
+2. **Twitter** via Apify `xquik/x-tweet-scraper` (search `from:<handle>`) → recent tweets per handle; drops already-seen IDs and anything older than the window. Native **X Articles** (long-form posts at `x.com/i/article/…`) are detected and their **bodies rendered in headless Chrome** using the user's X login, then summarized like any other content. (External articles the author links to — Substack, blogs — are passed to Perplexity to read directly.)
 3. **YouTube** via Apify `codepoetry/youtube-transcript-ai-scraper` → recent video **transcripts** per channel (deduped).
 4. Sends the raw tweets + transcripts + article URLs to **Perplexity** with a strict prompt:
    - **PASS 1 — CLASSIFY**: each point is a **FACT** (asserted as established) or an **OPINION** (take/prediction).
@@ -67,12 +72,14 @@ Accounts live in `.claude/skills/creator-watch/watchlist.json`. Add/remove handl
 ## Cost
 - Apify: ~$0.40/1k tweets + ~$0.70/1k transcripts. For this small watchlist screened every few days: **low single-digit $/month**.
 - Perplexity: one call per run (does classification + verification + web lookups internally). `--depth deep` costs more.
+- Article rendering: ~5-8s per X Article in headless Chrome, capped at `CW_MAX_ARTICLES` (4) per handle. An active account's first run renders several; later runs render only newly-posted ones (seen ones are deduped).
 - If anything goes over budget, the script doesn't run again until invoked — it never auto-fires (`disable-model-invocation: true`).
 
 ## Guardrails
 - **Facts vs Opinions split is mandatory**, and facts must be verified. If a fact can't be verified, it's tagged `unverifiable` — never presented as confirmed.
 - Only summarize what was actually fetched. Never fabricate quotes, numbers, or sources. Perplexity is told this explicitly.
-- **Never read `.env`** — the script loads `PERPLEXITY_API_KEY` and `APIFY_API_KEY` itself.
+- **Never read `.env`** — the script loads `PERPLEXITY_API_KEY`, `APIFY_API_KEY`, `X_AUTH_TOKEN`, `X_CT0` itself.
+- **X session:** never click "Log out" on x.com in the browser the cookies came from — it invalidates `auth_token` immediately. If article fetches hit a login wall, the digest prints an "X session expired" warning; refresh `X_AUTH_TOKEN`/`X_CT0` from DevTools.
 - If an account fails (private/suspended/dead, or the actor's input shape changed), the script notes it in stderr and continues with the rest; it does **not** advance `lastRun` when a fetch errors, so the next run retries the gap.
 - Don't run more often than needed — each run costs money. Default cadence is a few times a week.
 
@@ -83,6 +90,7 @@ Accounts live in `.claude/skills/creator-watch/watchlist.json`. Add/remove handl
 - **YouTube returns no transcript:** confirm `YT_ACTOR` accepts `{ startUrls:[{url}] }`; if it wants a different field (e.g. `urls`, `channelUrls`), edit `buildYtInput()`. Some videos genuinely have no captions.
 - **Perplexity timeout:** use `--depth standard` or `quick` (deep research can take minutes).
 - **Sources list looks short:** it's built from every URL inlined in the text — Perplexity's separate `citations` array is often a partial subset on long answers, so it isn't relied on. Re-run with `--force` to regenerate a capture.
+- **"X session expired" warning / articles not fetched:** `X_AUTH_TOKEN`/`X_CT0` rotated or you logged out of x.com. Re-grab both from DevTools (Application → Cookies → x.com) and update `.env`. Also confirm `npm install` ran in the skill dir (`playwright-core` must be present) and Google Chrome is installed.
 
 ## Notes
 - Verification tags are **probabilistic** — the web can be silent on niche claims, and Perplexity can be wrong. Treat `disputed`/`unverifiable` as flags to weigh, not verdicts.

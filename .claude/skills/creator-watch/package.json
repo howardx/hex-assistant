@@ -1,0 +1,9 @@
+{
+  "name": "creator-watch",
+  "private": true,
+  "type": "module",
+  "description": "Node deps for the creator-watch skill. Playwright renders login-walled X Articles using your installed Chrome. Install: npm install (run in this directory).",
+  "dependencies": {
+    "playwright-core": "^1.61.0"
+  }
+}

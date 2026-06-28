@@ -14,9 +14,16 @@
       {
         "matcher": "Write",
         "hooks": [
-          { "type": "command", "command": "node .claude/hooks/validate-skill-or-agent.mjs" }
+          {
+            "type": "command",
+            "command": "node .claude/hooks/validate-skill-or-agent.mjs"
+          }
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
   }
 }

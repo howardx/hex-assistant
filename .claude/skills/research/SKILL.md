@@ -25,6 +25,11 @@ node .claude/skills/research/research.mjs "<topic>" [--depth quick|standard|deep
 - `--depth` maps to Perplexity models: `quick` (`sonar`), `standard` (`sonar-pro`), `deep` (`sonar-deep-research`, 1–5 min; default).
 - The Perplexity key lives in `.env` (`PERPLEXITY_API_KEY`); the script reads it at runtime. **Never read `.env` yourself.**
 
+**Save the full report (don't skip — this is what was getting lost):**
+1. Get today's date with `date +%F` (don't guess).
+2. Save the full script output to `research/<YYYY-MM-DD>-<slug>.md` (short kebab slug from the topic; `mkdir -p research` if missing). This mirrors what the `research` subagent does — without it, the report lives only in transient tool output and can disappear.
+3. Cite that saved path to the user when you present the distillation.
+
 ### Research brief (applies to either path)
 Frame the topic + optional focus angle so the result covers:
 - What it is / the core idea

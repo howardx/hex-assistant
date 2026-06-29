@@ -35,6 +35,11 @@ Skills live in `.claude/skills/` (each a folder with a `SKILL.md`); subagents li
 
 **Where a skill runs:** main agent by default; delegate to a sub-agent only when the task needs isolation. The prompt decides which.
 
+**Skill triggers (auto-invoke — don't make the user ask twice):**
+- The user says **"research," "go deep," "investigate," "look into," or "what's the landscape for"** → invoke the **`research` skill**, even if the question reads like a factual lookup. That wording is a direct request for the skill.
+- Genuine one-fact lookup (a single date, definition, or value) → `WebSearch`, and say so.
+- **If you're unsure whether it's a research-skill task or a simple web search, ask the user — don't assume.** Never silently substitute `WebSearch`/`WebFetch` when a skill might apply.
+
 **Creating/editing skills or subagents:** follow `references/sops/writing-skills-and-subagents.md` (frontmatter, conciseness, tool-restriction, the skill/subagent split). A PreToolUse hook validates new files automatically.
 
 Installed:
